@@ -16,7 +16,7 @@ protocol ImageDataCacheProtocol {
     func keyForURL(for url: URL) -> String
 }
 
-// This is a wrap calls to be able to use swift environmentObject as a rudimentary DI container
+// This is a container class to be able to use swift environmentObject as a rudimentary DI container
 class ImageDataCacheContainer: ObservableObject {
     var imageDataCache: ImageDataCacheProtocol
     
@@ -30,7 +30,6 @@ class ImageDataCache: ObservableObject, ImageDataCacheProtocol {
     private let cacheDirectory: URL
     private let queue = DispatchQueue(label: "com.imageCache.diskAccess", attributes: .concurrent)
     
-    // Add memory cache directly to the class
     private let memoryCache = NSCache<NSString, NSData>()
     private let fileDataHandler: FileDataHandlerProtocol
     
@@ -65,32 +64,41 @@ class ImageDataCache: ObservableObject, ImageDataCacheProtocol {
     }
     
     func loadImageData(forKey key: URL) async -> Data? {
-        let cacheKey = keyForURL(for: key) as NSString
+        let cacheKey = keyForURL(for: key)
         
         // Check memory cache first
-        if let cachedData = memoryCache.object(forKey: cacheKey) as Data? {
+        if let cachedData = memoryCache.object(forKey: cacheKey as NSString) as Data? {
             return cachedData
         }
         
         // Otherwise, try to get from disk asynchronously.
-        let fileURL = cacheDirectory.appendingPathComponent(cacheKey as String)
+        let fileURL = cacheDirectory.appendingPathComponent(cacheKey)
         
         return await withCheckedContinuation { continuation in
             queue.async {
                 do {
                     let data = try self.fileDataHandler.read(from: fileURL)
+
+                    if let data = data {
+                        self.memoryCache.setObject(data as NSData,
+                                                   forKey: cacheKey as NSString,
+                                                   cost: data.count)
+                    }
+
                     continuation.resume(returning: data)
                 } catch {
-                    continuation.resume(returning: nil) // Handle errors as appropriate
+                    continuation.resume(returning: nil)
                 }
             }
         }
     }
     
     func deleteImageData(forKey key: URL) async throws {
-        let fileURL = cacheDirectory.appendingPathComponent(keyForURL(for: key))
+        let cacheKey = keyForURL(for: key)
+
+        let fileURL = cacheDirectory.appendingPathComponent(cacheKey)
         
-        memoryCache.removeObject(forKey: keyForURL(for: key) as NSString)
+        memoryCache.removeObject(forKey: cacheKey as NSString)
         
         return try await withCheckedThrowingContinuation { continuation in
             queue.async(flags: .barrier) {
